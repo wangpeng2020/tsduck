@@ -348,25 +348,39 @@ ts::UString& ts::UString::assignFromUTF8(const char* utf8, size_type count)
 
 void ts::UString::toUTF8(ByteBlock& utf8) const
 {
+    utf8.clear();
+    appendUTF8(utf8);
+}
+
+void ts::UString::appendUTF8(ByteBlock& utf8) const
+{
     // The maximum number of UTF-8 bytes is 3 times the number of UTF-16 codes.
-    utf8.resize(3 * size());
+    const size_t previous_size = utf8.size();
+    utf8.resize(previous_size + 3 * size());
 
     const UChar* in_start = data();
     char* const utf8_start = reinterpret_cast<char*>(utf8.data());
-    char* out_start = utf8_start;
-    ConvertUTF16ToUTF8(in_start, in_start + size(), out_start, out_start + utf8.size());
+    char* out_start = utf8_start + previous_size;
+    ConvertUTF16ToUTF8(in_start, in_start + size(), out_start, utf8_start + utf8.size());
 
     utf8.resize(out_start - utf8_start);
 }
 
 void ts::UString::toUTF8(std::string& utf8) const
 {
+    utf8.clear();
+    appendUTF8(utf8);
+}
+
+void ts::UString::appendUTF8(std::string& utf8) const
+{
     // The maximum number of UTF-8 bytes is 3 times the number of UTF-16 codes.
-    utf8.resize(3 * size());
+    const size_t previous_size = utf8.size();
+    utf8.resize(previous_size + 3 * size());
 
     const UChar* in_start = data();
-    char* out_start = utf8.data();
-    ConvertUTF16ToUTF8(in_start, in_start + size(), out_start, out_start + utf8.size());
+    char* out_start = utf8.data() + previous_size;
+    ConvertUTF16ToUTF8(in_start, in_start + size(), out_start, utf8.data() + utf8.size());
 
     utf8.resize(out_start - utf8.data());
 }
@@ -1743,6 +1757,30 @@ bool ts::UString::toTristate(Tristate& value) const
 
 
 //----------------------------------------------------------------------------
+// Internal helper for Duration().
+//----------------------------------------------------------------------------
+
+ts::UString ts::UString::DurationHelper(cn::milliseconds::rep value, bool with_days)
+{
+    constexpr cn::milliseconds::rep one_hour = 3'600'000;
+    constexpr cn::milliseconds::rep one_day = 24 * one_hour;
+    UString s;
+    if (value < 0) {
+        s.append(u'-');
+        value = -value;
+    }
+    if (with_days && value >= one_day) {
+        s.format(u"%dd ", value / one_day);
+        value %= one_day;
+    }
+    const cn::milliseconds::rep hours = value / one_hour;
+    value %= one_hour;
+    s.format(u"%02d:%02d:%02d.%03d", hours, value / 60'000, (value / 1000) % 60, value % 1000);
+    return s;
+}
+
+
+//----------------------------------------------------------------------------
 // Interpret this string as a sequence of hexadecimal digits (ignore blanks).
 //----------------------------------------------------------------------------
 
@@ -2666,6 +2704,7 @@ ts::UString ts::UString::Float(double value, size_type width, size_type precisio
     TS_GCC_NOWARNING(format-nonliteral)
     TS_LLVM_NOWARNING(format-nonliteral)
     TS_MSC_NOWARNING(4774) // 'snprintf' : format string expected in argument 3 is not a string literal
+    // Flawfinder: ignore: format used on purpose
     std::snprintf(&str[0], str.size(), format.c_str(), int(width), int(precision), value);
     TS_POP_WARNING()
 

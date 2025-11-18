@@ -15,6 +15,7 @@
 
 #pragma once
 #include "tsTCPConnection.h"
+#include "tsTLSArgs.h"
 
 namespace ts {
     //!
@@ -26,6 +27,15 @@ namespace ts {
     //! - A TLS server creates a TLSServer instance and @e waits for clients. For each
     //!   client session, a TLSConnection instance is created.
     //!
+    //! Possible public servers to test various invalid certificates:
+    //! - https://expired.badssl.com/
+    //! - https://wrong.host.badssl.com/
+    //! - https://self-signed.badssl.com/
+    //! - https://untrusted-root.badssl.com/
+    //! - https://revoked.badssl.com/
+    //! - https://pinning-test.badssl.com/
+    //! - see more details at https://badssl.com/
+    //!
     class TSCOREDLL TLSConnection: public TCPConnection
     {
         TS_NOCOPY(TLSConnection);
@@ -36,28 +46,42 @@ namespace ts {
         using SuperClass = TCPConnection;
 
         //!
-        //! Constructor
+        //! Constructor.
         //!
         TLSConnection();
 
         //!
-        //! For a client connection, specify if the server's certificate is verified during connect().
-        //! @param [in] verify If true (the default), the server's certificate is verified during
-        //! connact() and the connection fails if the certificate is invalid (e.g. auto-signed or
-        //! not issued by a trusted CA).
+        //! Constructor with initial client arguments.
+        //! @param [in] args Initial TLS client arguments.
         //!
-        //! LIMITATION: Currently, only the validity of the server certificate is verified.
-        //! The server name is not verified yet. To be implemented later. Currently, TLS is
-        //! only a way to encrypt TCP sessions in TSDuck. It does not prevent MitM attacks.
-        //!
-        void setVerifyServer(bool verify) { _verify_server = verify; }
+        TLSConnection(const TLSArgs& args) : TLSConnection() { setArgs(args); }
 
         //!
-        //! For a client connection, check if the server's certificate is verified during connect().
-        //! @return True if the server's certificate is verified during connact().
+        //! Set command line arguments for the client.
+        //! @param [in] args TLS arguments.
+        //!
+        void setArgs(const TLSArgs& args);
+
+        //!
+        //! Check if the peer's certificate shall be verified.
+        //! @param [in] on If true, the peer's certificate will be verified.
+        //!
+        void setVerifyPeer(bool on) { _verify_peer = on; }
+
+        //!
+        //! For a client connection, specify the server name to be used in SNI (Server Name Indication).
+        //! @param [in] server_name Main server name, as specified in SNI (Server Name Indication).
+        //! Also used to verify the server's certificate when setVerifyPeer() is true.
+        //!
+        void setServerName(const UString& server_name);
+
+        //!
+        //! For a client connection, add another accepted host name for the server's certificate verification during connect().
+        //! The list is reset by setVerifyServer().
+        //! @param [in] name Additional accepted host name used to verify the server's certificate.
         //! @see setVerifyServer()
         //!
-        bool getVerifyServer() const { return _verify_server; }
+        void addVerifyServer(const UString& name);
 
         // Inherited methods.
         virtual ~TLSConnection() override;
@@ -86,19 +110,19 @@ namespace ts {
         SystemGuts* _guts = nullptr;
 
         // Common properties.
-        bool _verify_server = true;
+        bool        _verify_peer = false;
+        UString     _server_name {};
+        UStringList _additional_names {};
 
         // Allocate and deallocate guts (depend on implementations).
         void allocateGuts();
         void deleteGuts();
 
         // Pass information from server accepting new clients.
+        // The parameter is:
+        // - On UNIX systems with OpenSSL, a pointer to ::SSL.
+        // - On Windows systems whith SChannel, a pointer to ::CERT_CONTEXT.
         friend class TLSServer;
-    #if defined(TS_WINDOWS)
-        //@@@
-    #else
-        // The parameter is an SSL*.
-        void setServerContext(void* ssl);
-    #endif
+        bool setServerContext(const void* param, Report& report);
     };
 }

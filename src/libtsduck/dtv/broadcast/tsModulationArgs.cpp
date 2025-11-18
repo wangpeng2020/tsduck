@@ -19,6 +19,7 @@
 #include "tsS2SatelliteDeliverySystemDescriptor.h"
 #include "tsTerrestrialDeliverySystemDescriptor.h"
 #include "tsISDBTerrestrialDeliverySystemDescriptor.h"
+#include "tsDektecSupport.h"
 #include "tsCerrReport.h"
 
 
@@ -32,6 +33,7 @@ void ts::ModulationArgs::clear()
     frequency.reset();
     polarity.reset();
     lnb.reset();
+    unicable.reset();
     inversion.reset();
     symbol_rate.reset();
     inner_fec.reset();
@@ -78,6 +80,7 @@ void ts::ModulationArgs::clear()
 void ts::ModulationArgs::resetLocalReceptionParameters()
 {
     lnb.reset();
+    unicable.reset();
     satellite_number.reset();
 }
 
@@ -85,6 +88,9 @@ void ts::ModulationArgs::copyLocalReceptionParameters(const ModulationArgs& othe
 {
     if (other.lnb.has_value()) {
         lnb = other.lnb;
+    }
+    if (other.unicable.has_value()) {
+        unicable = other.unicable;
     }
     if (other.satellite_number.has_value()) {
         satellite_number = other.satellite_number;
@@ -103,6 +109,7 @@ bool ts::ModulationArgs::hasModulationArgs() const
         frequency.has_value() ||
         polarity.has_value() ||
         lnb.has_value() ||
+        unicable.has_value() ||
         inversion.has_value() ||
         symbol_rate.has_value() ||
         inner_fec.has_value() ||
@@ -347,7 +354,7 @@ bool ts::ModulationArgs::GetBitRateQAM(BitRate& bitrate, const ModulationArgs& a
         // For the sake of bitrate computation, this is the same as 8PSK.
         modulation = PSK_8;
         fec = args.inner_fec.value_or(DEFAULT_INNER_FEC);
-        symbol_rate = args.symbol_rate.value_or(DEFAULT_SYMBOL_RATE_DVBS);
+        symbol_rate = args.symbol_rate.value_or(DEFAULT_SYMBOL_RATE_ISDBS);
     }
     else {
         return false;
@@ -417,7 +424,7 @@ bool ts::ModulationArgs::GetBitRateDVBT(BitRate& bitrate, const ModulationArgs& 
     //
     // BPS = bits/symbol
     // FEC = forward error correction = FECM/FECD
-    // BR = useful bit rate
+    // BR = useful bitrate
     //    = SR * BPS * FEC * 188/204
     //    = (SR * BPS * FECM * 188) / (FECD * 204)
     //    = (6048 * GID * BW * BPS * FECM * 188) / (7168 * (GID + GIM) * FECD * 204)
@@ -460,6 +467,18 @@ bool ts::ModulationArgs::GetBitRateATSC(BitRate& bitrate, const ModulationArgs& 
 
 ts::BitRate ts::ModulationArgs::theoreticalBitrate() const
 {
+    // Warning: This is a hack...
+    // We implement a few bitrate calculators in this library. Some more complicated
+    // modulations such as DVB-S2 are not supported here. However, the Dektec DTAPI
+    // library contains more powerful ways of computing bitrates, including DVB-S2.
+    // Because the DTAPI is not open-source, it has been included in an optional shared
+    // library "libtsdektec" that open-source zealots may want to delete. Therefore,
+    // unless you use the "dektec" plugin, this "libtsdektec", if present, is not loaded
+    // inside the process space. By explicitly checking once if Dektec is supported, we
+    // force the load of "libtsdektec". During the load, its initialization registers
+    // its own generic bitrate calculator, which may support additional modulations.
+    [[maybe_unused]] static const bool has_dektec = HasDektecSupport();
+
     BitRate bitrate = 0;
 
     // Try specialized calculators first.
@@ -478,7 +497,7 @@ ts::BitRate ts::ModulationArgs::theoreticalBitrate() const
     }
 
     // Don't know how to compute for that modulation.
-    return false;
+    return 0;
 }
 
 
@@ -778,7 +797,7 @@ std::ostream& ts::ModulationArgs::display(std::ostream& strm, const ts::UString&
             if (inner_fec.has_value() && inner_fec != ts::FEC_AUTO) {
                 strm << margin << "FEC inner: " << InnerFECEnum().name(inner_fec.value()) << std::endl;
             }
-            if (isi.has_value() && isi != ISI_DISABLE) {
+            if ((verbose || delivery_system != DS_DVB_S) && isi.has_value() && isi != ISI_DISABLE) {
                 strm << margin << "Input stream id: " << isi.value() << std::endl
                      << margin << "PLS code: " << pls_code.value_or(DEFAULT_PLS_CODE) << std::endl
                      << margin << "PLS mode: "<< PLSModeEnum().name(pls_mode.value_or(DEFAULT_PLS_MODE)) << std::endl;
@@ -791,6 +810,9 @@ std::ostream& ts::ModulationArgs::display(std::ostream& strm, const ts::UString&
             }
             if (verbose && lnb.has_value()) {
                 strm << margin << "LNB: " << lnb.value() << std::endl;
+            }
+            if (verbose && unicable.has_value()) {
+                strm << margin << "Unicable: " << unicable.value() << std::endl;
             }
             if (verbose) {
                 strm << margin << "Satellite number: " << satellite_number.value_or(DEFAULT_SATELLITE_NUMBER) << std::endl;
@@ -958,18 +980,21 @@ ts::UString ts::ModulationArgs::toPluginOptions(bool no_local) const
                 opt += UString::Format(u" --pilots %s --roll-off %s",
                                        PilotEnum().name(pilots.value_or(DEFAULT_PILOTS)),
                                        RollOffEnum().name(roll_off.value_or(DEFAULT_ROLL_OFF)));
-            }
-            if (isi.has_value() && isi != DEFAULT_ISI) {
-                opt += UString::Format(u" --isi %d", isi.value());
-            }
-            if (pls_code.has_value() && pls_code != DEFAULT_PLS_CODE) {
-                opt += UString::Format(u" --pls-code %d", pls_code.value());
-            }
-            if (pls_mode.has_value() && pls_mode != DEFAULT_PLS_MODE) {
-                opt += UString::Format(u" --pls-mode %s", PLSModeEnum().name(pls_mode.value()));
+                if (isi.has_value() && isi != DEFAULT_ISI) {
+                    opt += UString::Format(u" --isi %d", isi.value());
+                }
+                if (pls_code.has_value() && pls_code != DEFAULT_PLS_CODE) {
+                    opt += UString::Format(u" --pls-code %d", pls_code.value());
+                }
+                if (pls_mode.has_value() && pls_mode != DEFAULT_PLS_MODE) {
+                    opt += UString::Format(u" --pls-mode %s", PLSModeEnum().name(pls_mode.value()));
+                }
             }
             if (!no_local && lnb.has_value()) {
                 opt += UString::Format(u" --lnb %s", lnb.value());
+            }
+            if (!no_local && unicable.has_value()) {
+                opt += UString::Format(u" --unicable %s", unicable.value());
             }
             if (!no_local && satellite_number.has_value()) {
                 opt += UString::Format(u" --satellite-number %d", satellite_number.value());
@@ -978,7 +1003,7 @@ ts::UString ts::ModulationArgs::toPluginOptions(bool no_local) const
         }
         case TT_ISDB_S: {
             opt += UString::Format(u" --symbol-rate %'d --fec-inner %s --polarity %s",
-                                   symbol_rate.value_or(DEFAULT_SYMBOL_RATE_DVBS),
+                                   symbol_rate.value_or(DEFAULT_SYMBOL_RATE_ISDBS),
                                    InnerFECEnum().name(inner_fec.value_or(DEFAULT_INNER_FEC)),
                                    PolarizationEnum().name(polarity.value_or(DEFAULT_POLARITY)));
             if (stream_id.has_value() && stream_id != DEFAULT_STREAM_ID) {
@@ -1214,6 +1239,15 @@ bool ts::ModulationArgs::loadArgs(DuckContext& duck, Args& args)
             lnb = l;
         }
     }
+    if (args.present(u"unicable")) {
+        Unicable uc;
+        if (uc.decode(args.value(u"unicable"), duck.report())) {
+            unicable = uc;
+        }
+        else {
+            status = false;
+        }
+    }
     args.getOptionalIntValue(satellite_number, u"satellite-number");
 
     // Mark arguments as invalid is some errors were found.
@@ -1250,6 +1284,11 @@ void ts::ModulationArgs::defineArgs(Args& args, bool allow_short_options)
               u"For compatibility, the legacy format 'low_freq[,high_freq,switch_freq]' is also accepted "
               u"(all frequencies are in MHz). The default is a universal extended LNB.");
 
+    args.option(u"unicable", 0, Args::STRING);
+    args.help(u"unicable",
+              u"Used for satellite tuners only, in local Unicable distribution networks. "
+              u"Description of the Unicable switch. " + Unicable::StringFormat());
+
     args.option(u"spectral-inversion", 0, SpectralInversionEnum());
     args.help(u"spectral-inversion",
               u"Spectral inversion. The default is \"auto\".");
@@ -1267,10 +1306,11 @@ void ts::ModulationArgs::defineArgs(Args& args, bool allow_short_options)
               u"Used for satellite and cable tuners only. Inner Forward Error Correction. "
               u"The default is \"auto\".");
 
-    args.option(u"satellite-number", 0, Args::INTEGER, 0, 1, 0, 3);
+    args.option(u"satellite-number", 0, Args::INTEGER, 0, 1, 0, 63);
     args.help(u"satellite-number",
               u"Used for satellite tuners only. Satellite/dish number. "
-              u"Must be 0 to 3 with DiSEqC switches and 0 to 1 fornon-DiSEqC switches. The default is 0.");
+              u"Must be 0 to 63 with DiSEqC switches and 0 to 1 for non-DiSEqC switches. The default is 0. "
+              u"If you have cascaded switches, it is assumed that the DiSEqC 1.1 switch is nearest to the receiver.");
 
     args.option(u"modulation", allow_short_options ? 'm' : 0, ModulationEnum());
     args.help(u"modulation",

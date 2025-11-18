@@ -12,14 +12,22 @@
 [.cmd-header]
 Send live metrics to InfluxDB, a data source for Grafana
 
-By default, the plugin sends the global transport stream bitrate only.
-Using options, other bitrate information are sent: by PID, by type of PID (audio, video, etc.), by service.
+By default, the plugin sends the global transport stream bitrate at regular intervals (5 seconds by default).
 
-It is also possible to send most error counters which are defined in <<ETSI-101-290>>.
+Other options include:
+
+[.compact-list]
+* Bitrate information by PID, by type of PID (audio, video, etc.), by service.
+* Last PCR/PTS/DTS timestamp values by PID, by service.
+* Error counters as defined in <<ETSI-101-290>>.
+* Inter-packet Arrival Time (IAT) for datagram-based inputs.
 
 Be careful to send the required information for your graph only.
 Sending bitrate information for all PID's, all types of PID's, and all services,
 every second, may overload the InfluxDB database. Do some benchmarking first.
+
+Even though InfluxDB is typically used as a Grafana data source,
+the collected data can be used by other applications for analytics, monitoring, etc.
 
 [.usage]
 Usage
@@ -30,7 +38,7 @@ $ tsp -P influx [options]
 ----
 
 [.usage]
-Timing options
+General options
 
 [.opt]
 *-i* _seconds_ +
@@ -43,37 +51,11 @@ Interval in seconds between metrics reports to InfluxDB.
 The default is 5 seconds. This is usually the minimal update interval in Grafana.
 
 [.opt]
-*--local-time*
+*--max-metrics* _count_
 
 [.optdoc]
-Transmit timestamps as local time, based on the current system configuration.
-
-[.optdoc]
-By default, timestamps are transmitted as UTC time.
-
-[.opt]
-*--pcr-based*
-
-[.optdoc]
-Use playout time based on PCR values.
-By default, the time is based on the wall-clock time (real time).
-
-[.opt]
-*--start-time* _year/month/day:hour:minute:second_
-
-[.optdoc]
-With `--pcr-based` or `--timestamp-based`, specify the initial date and time reference.
-
-[.optdoc]
-By default, with `--pcr-based` or `--timestamp-based`, the activity starts at the first UTC time which is found in a DVB TDT or ATSC STT.
-
-[.opt]
-*--timestamp-based*
-
-[.optdoc]
-Use playout time based on timestamp values from the input plugin.
-When input timestamps are not available or not monotonic, fallback to `--pcr-based`.
-By default, the time is based on the wall-clock time (real time).
+Terminate `tsp` after sending the specified number of metrics.
+This is a test option. The processing is never stopped by default.
 
 [.usage]
 Monitored information options
@@ -83,8 +65,35 @@ Monitored information options
 *--all-pids*
 
 [.optdoc]
-Send bitrate monitoring data for all PID's.
+Send metrics data for all PID's.
 Equivalent to `--pid 0-8191`.
+
+[.opt]
+*--bitrate*
+
+[.optdoc]
+Send bitrate monitoring data.
+
+[.optdoc]
+This option is only useful in addition to `--pcr`, `--pts`, `--dts`, `--tr-101-290`.
+Otherwise, this is the default.
+
+[.opt]
+*--dts*
+
+[.optdoc]
+Send the last DTS value in a set of PID and/or services.
+Also specify at least one of `--pid`, `--all-pids`, `--services`.
+
+[.opt]
+*--iat*
+
+[.optdoc]
+Send metrics on Inter-packet Arrival Time (IAT) for datagram-based inputs (`ip`, `pcap`, `srt`, `rist`).
+Ignored if the input is not datagram-based.
+
+[.optdoc]
+See xref:_iat[xrefstyle=short] the documentation of plugin `iat` for more details on inter-packet arrival times.
 
 [.opt]
 *--max-severity* _value_
@@ -106,11 +115,18 @@ With `--services`, the services are identified in InfluxDB by their name, when a
 Services without name are identified by their id in decimal.
 
 [.opt]
+*--pcr*
+
+[.optdoc]
+Send the last PCR value in a set of PID and/or services.
+Also specify at least one of `--pid`, `--all-pids`, `--services`.
+
+[.opt]
 *-p* _pid1[-pid2]_ +
 *--pid* _pid1[-pid2]_
 
 [.optdoc]
-Send bitrate monitoring data for the specified PID's.
+Send metrics data for the specified PID's.
 The PID's are identified in InfluxDB by their value in decimal.
 
 [.optdoc]
@@ -118,11 +134,18 @@ Several `--pid` options may be specified.
 To save bandwidth and database space, PID's with no packets during an interval are not reported for that interval.
 
 [.opt]
+*--pts*
+
+[.optdoc]
+Send the last PTS value in a set of PID and/or services.
+Also specify at least one of `--pid`, `--all-pids`, `--services`.
+
+[.opt]
 *-s* +
 *--services*
 
 [.optdoc]
-Send bitrate monitoring data for services.
+Send metrics data for services.
 The services are identified in InfluxDB by their id in decimal.
 
 [.opt]
@@ -134,48 +157,23 @@ This plugin can detect a subset of ETSI TR 101 290 only:
 all transport stream logical checks are performed but physical checks on modulation cannot be reported.
 See more details below.
 
+[.optdoc]
+By default, all defined error counters are sent at each interval for the whole transport stream,
+even when the counter value is zero.
+In addition, if `--services` or `--pid` or `--all-pids` are specified, each counter is also sent
+for each service or PID, only when the counter value is not zero.
+The scope of each counter, transport stream, service, or PID, is specified in the tag `scope`.
+See more details below.
+
 [.opt]
 *--type*
 
 [.optdoc]
-Send bitrate monitoring by type of PID's (audio, video, subtitles, PSI, etc.)
+Send bitrate metrics data by type of PID's (audio, video, subtitles, PSI, etc.)
 See more details below.
 
-include::{docdir}/opt/group-influx.adoc[tags=!*]
-
-[.usage]
-Tuning options
-
-[.opt]
-*--max-metrics* _count_
-
-[.optdoc]
-Terminate `tsp` after sending the specified number of metrics.
-This is a test option. The processing is never stopped by default.
-
-[.opt]
-*--queue-size* _count_
-
-[.optdoc]
-Maximum number of queued metrics between the plugin thread and the communication thread with InfluxDB.
-
-[.optdoc]
-Sending metrics data to the InfluxDB server means calling the Web API of the server and posting data through HTTP.
-Depending on the response time of the server, this may introduce some delay in real-time streams.
-To avoid this, the communication with the InfluxDB server is asynchronously performed in an independent thread.
-The metrics data are queued between the plugin thread and the communication thread, without delaying the plugin thread.
-The number of messages in that queue is limited to avoid memory exhaustion in case of communication problem.
-When the queue becomes full, additional metrics are dropped.
-
-[.optdoc]
-On real-time streams, where metrics data are sent every few seconds, there is never more than one message in that queue.
-However, with `--pcr-based` or `--timestamp-based`, on off-line streams which are processed at high speed (files for instance),
-the metrics may be generated faster than they can be sent and the queue may grow.
-Increase the queue size if some metrics are lost.
-
-[.optdoc]
-The default queue size is 10 messages.
-
+include::{docdir}/opt/group-clock.adoc[tags=!*]
+include::{docdir}/opt/group-influx.adoc[tags=!*;short]
 include::{docdir}/opt/group-common-plugins.adoc[tags=!*]
 
 ==== Building Flux queries for Grafana
@@ -187,53 +185,100 @@ The provided information shall be used to build Flux queries.
 
 At each specified interval (option `--interval`), this plugin sends a list of metrics entries.
 
-A time stamp is always provided with each data entry.
+A timestamp is always provided with each data entry.
 Depending on the plugin options, this can be a local time or a UTC time,
 a wall-clock time or a time which is extracted from the stream.
 
-In each data entry, the `_measurement` is the either the string `bitrate` or the string `counter`.
-The field `_value` is either a bitrate in bits/second or a number of errors (with `counter`).
-The `_value` type is `float` (in practice, an integer value is provided).
+The following table lists the possible types of the field `_measurement` and the semantics of the corresponding field `value`.
+The `value` type is `float` (in practice, an integer value is provided).
+The tags are present for all occurrences of the corresponding `_measurement`.
+The presence of the secondary tags depend on the `scope` tag.
 
-===== Bitrate metrics
-
-In each bitrate entry, the field `_measurement` is `bitrate` and the tag `scope` indicate the type of entry.
-Depending on the value value of `scope`, a second tag is provided.
-
-The following table lists the possible `scope` values and the corresponding second tag.
-
-// PDF backend does not correctly process "autowidth" tables.
-.InfluxDB bitrate metrics
-ifndef::backend-pdf[]
-[cols="<1m,<1m,<1,<1",stripes=none,options="autowidth"]
-endif::[]
-ifdef::backend-pdf[]
-[cols="<8m,<8m,<37,<37",stripes=none]
-endif::[]
+.InfluxDB measurements and values
+[cols="<1m,<1,<1m,<1m",stripes=none,options="autowidth"]
 |===
-|scope |Tag 2 |Tag 2 value |Bitrate value
+|_measurement |value |Tags |Secondary tags
 
-|ts
-|tsid
-|TS id in decimal.
-|Full TS bitrate.
+|bitrate
+|bitrate in bits/second
+|scope tsid
+|pid service type
 
-|pid
-|pid
-|PID in decimal.
-|With `--pid`, bitrate of that PID.
+|counter
+|number of errors
+|name severity scope tsid
+|pid service
 
-|service
-|service
-|Service id in decimal, or service name, or `global` for all global PID's.
-|With `--service`, cumulated bitrate of all PID's of that service.
+|dts
+|DTS value in 90 kHz units
+|scope tsid
+|pid service
 
+|iat
+|inter-packet arrival time in microseconds
 |type
-|type
-|One of `audio`, `data`, `ecm`, `emm`, `pcr`, `psi`, `stuffing`, `subtitles`, `undefined`, `video`.
-|With `--type`, cumulated bitrate of all PID's of that type.
+|
+
+|pcr
+|PCR value in 27 MHz units
+|scope tsid
+|pid service
+
+|pts
+|PTS value in 90 kHz units
+|scope tsid
+|pid service
 
 |===
+
+==== Custom identification of metrics
+
+It is possible to add user-defined tags to build a custom identification.
+This can be useful if several instances of the plugin `influx` send metrics to the same bucket.
+
+Consider the following defaut metrics, sending the global bitrate of the TS.
+
+[source,text]
+----
+bitrate,scope=ts,tsid=4 value=22936796 1548161530912
+----
+
+Following the format which is defined by InfluxDB, we see the following components:
+
+[.compact-list]
+* The first identifier `bitrate` defines the type of _measurement_, here a bitrate.
+* The following fields `scope` and `tsid` are _tags_. They can be used as filters in Flux queries.
+* The `value` field is the numerical value of the measurement. Its interpretation depends on the type of measurement.
+* The last numerical field is the timestamp of the measurement.
+
+Using `-P influx --tag operator=tvsat --tag satellite=sat1`, the two user-specified tags are added to all metrics.
+The previous metrics become:
+
+[source,text]
+----
+bitrate,scope=ts,tsid=4,operator=tvsat,satellite=sat1 value=22936796 1548161530912
+----
+
+Using that kind of custom identification, it is possible to build complex Flux queries to select metrics
+from specific user-identified sources.
+
+==== Bitrate metrics
+
+Each entry contains the following information:
+
+[.compact-list]
+* Field `_measurement`: `bitrate`.
+* Field `value`: the bitrate in bits/second during the measurement period.
+* Tag `scope`: an identifier defining the scope of the bitrate value.
+  The possible values are `ts` (total bitrate of the transport stream),
+  `service` (accumulated bitrate of all PID's in a service), `pid` (bitrate of one PID),
+  or `type` (accumulated bitrate of all PID's of a given type).
+* Tag `tsid`: this is the transport stream id as an integer.
+* Tag `service`: when `scope=service`, this is the service name or service id as an integer,
+  or `global` for all global PID's (ie. not attached to any service).
+* Tag `pid`: when `scope=pid`, this is the PID as an integer.
+* Tag `type`: when `scope=type`, this is one of `audio`, `data`, `ecm`, `emm`, `pcr`, `psi`,
+  `stuffing`, `subtitles`, `undefined`, `video`.
 
 Note that if a PID is shared between several services,
 its bitrate is included in the bitrate of all services it belongs to.
@@ -257,11 +302,11 @@ With option `--type` on a clear stream, InfluxDB receives the following data:
 [source,text]
 ----
 bitrate,scope=ts,tsid=4 value=22936796 1548161530912
-bitrate,scope=type,type=psi value=231915 1548161530912
-bitrate,scope=type,type=video value=20195737 1548161530912
-bitrate,scope=type,type=audio value=2207176 1548161530912
-bitrate,scope=type,type=subtitles value=102425 1548161530912
-bitrate,scope=type,type=data value=199543 1548161530912
+bitrate,scope=type,tsid=4,type=psi value=231915 1548161530912
+bitrate,scope=type,tsid=4,type=video value=20195737 1548161530912
+bitrate,scope=type,tsid=4,type=audio value=2207176 1548161530912
+bitrate,scope=type,tsid=4,type=subtitles value=102425 1548161530912
+bitrate,scope=type,tsid=4,type=data value=199543 1548161530912
 ----
 
 With options `--services --names`, InfluxDB receives the following data:
@@ -269,15 +314,68 @@ With options `--services --names`, InfluxDB receives the following data:
 [source,text]
 ----
 bitrate,scope=ts,tsid=4 value=22936796 1548161530912
-bitrate,scope=service,service=M6 value=3874631 1548161530912
-bitrate,scope=service,service=W9 value=5054905 1548161530912
-bitrate,scope=service,service=Arte value=4344830 1548161530912
-bitrate,scope=service,service=France\ 5 value=3736119 1548161530912
-bitrate,scope=service,service=6ter value=5694397 1548161530912
-bitrate,scope=service,service=global value=231915 1548161530912
+bitrate,scope=service,tsid=4,service=M6 value=3874631 1548161530912
+bitrate,scope=service,tsid=4,service=W9 value=5054905 1548161530912
+bitrate,scope=service,tsid=4,service=Arte value=4344830 1548161530912
+bitrate,scope=service,tsid=4,service=France\ 5 value=3736119 1548161530912
+bitrate,scope=service,tsid=4,service=6ter value=5694397 1548161530912
+bitrate,scope=service,tsid=4,service=global value=231915 1548161530912
 ----
 
-===== ETSI TR 101 290 error counter metrics
+==== Timestamp metrics (PCR, PTS, DTS)
+
+Each entry contains the following information:
+
+[.compact-list]
+* Field `_measurement`: one of `pcr`, `pts`, `dts`, depending on the type of timestamp.
+* Field `value`: the raw value of the last timestamp of that type in the measurement period.
+* Tag `scope`: an identifier defining the scope of the bitrate value.
+  The possible values are `service` (last timestamp in any PID of a service), `pid` (last timestamp in one PID).
+* Tag `tsid`: this is the transport stream id as an integer.
+* Tag `service`: when `scope=service`, this is the service name or service id as an integer.
+* Tag `pid`: when `scope=pid`, this is the PID as an integer.
+
+[.usage]
+Examples
+
+With options `--pcr --services --names`, InfluxDB receives the following data:
+
+[source,text]
+----
+bitrate,scope=ts,tsid=4 value=22936796 1548161530912
+pcr,scope=service,tsid=4,service=M6 value=1783513330866 1548161530912
+pcr,scope=service,tsid=4,service=W9 value=1781908554388 1548161530912
+pcr,scope=service,tsid=4,service=Arte value=1782082319070 1548161530912
+pcr,scope=service,tsid=4,service=France\ 5 value=1783885926024 1548161530912
+pcr,scope=service,tsid=4,service=6ter value=1790246369026 1548161530912
+----
+
+==== IAT metrics
+
+Each entry contains the following information:
+
+[.compact-list]
+* Field `_measurement`: `iat`.
+* Field `_value`: the value of the inter-packet arrival time in microseconds.
+* Tag `type`: one of `mean`, `min` or `max`, indicating the type of metrics.
+
+[.usage]
+Examples
+
+With options `--iat`, InfluxDB receives the following data:
+
+[source,text]
+----
+bitrate,scope=ts,tsid=1 value=1009504 1760132351779
+iat,type=mean value=10436 1760132351779
+iat,type=min value=9547 1760132351779
+iat,type=max value=13487 1760132351779
+----
+
+NOTE: There are some operating system specificities in measuring IAT.
+See xref:_iat[xrefstyle=short] the documentation of plugin `iat` for more details.
+
+==== ETSI TR 101 290 error counter metrics
 
 With option `--tr-101-290`, each metrics entry contains one error counter for the last measurement interval.
 
@@ -285,10 +383,18 @@ Each entry contains the following information:
 
 [.compact-list]
 * Field `_measurement`: `counter`.
+* Field `_value`: the value of the counter, typically a number of errors.
 * Tag `name`: name of the error counter, as defined in <<ETSI-101-290>>, lowercase.
 * Tag `severity`: an integer value from 1 to 4, defining the severity of the error.
   The severity 1 (most severe) to 3 (less severe) are defined by <<ETSI-101-290>>
   in sections 5.2.1 to 5.2.3. The severity 4 (informational) is added by TSDuck.
+* Tag `scope`: an identifier defining the scope of the counter.
+  The possible values are `ts` (counter for all PID's in the transport stream),
+  `service` (counter for all PID's in a service), or `pid` (counter for one PID).
+* Tag `tsid`: this is the transport stream id as an integer.
+* Tag `service`: when `scope=service`, this is the service name or service id as an integer,
+  or `global` for all global PID's (ie. not attached to any service).
+* Tag `pid`: when `scope=pid`, this is the PID as an integer.
 
 The following table lists all rules which are implemented in this plugin and which
 error counter is incremented. The reference "x.y" is the rule number in <<ETSI-101-290>> section 5.2.
@@ -729,41 +835,75 @@ With option `--tr-101-290`, InfluxDB receives the following data:
 [source,text]
 ----
 bitrate,scope=ts,tsid=4 value=22936796 1548161530912
-counter,name=ts_sync_loss,severity=1 value=0 1548161530912
-counter,name=sync_byte_error,severity=1 value=0 1548161530912
-counter,name=pat_error,severity=1 value=0 1548161530912
-counter,name=pat_error_2,severity=1 value=0 1548161530912
-counter,name=continuity_count_error,severity=1 value=220 1548161530912
-counter,name=pmt_error,severity=1 value=0 1548161530912
-counter,name=pmt_error_2,severity=1 value=0 1548161530912
-counter,name=pid_error,severity=1 value=0 1548161530912
-counter,name=transport_error,severity=2 value=0 1548161530912
-counter,name=crc_error,severity=2 value=0 1548161530912
-counter,name=crc_error_2,severity=2 value=0 1548161530912
-counter,name=pcr_error,severity=2 value=0 1548161530912
-counter,name=pcr_repetition_error,severity=2 value=0 1548161530912
-counter,name=pcr_discontinuity_indicator_error,severity=2 value=0 1548161530912
-counter,name=pcr_accuracy_error,severity=2 value=0 1548161530912
-counter,name=pts_error,severity=2 value=10 1548161530912
-counter,name=cat_error,severity=2 value=0 1548161530912
-counter,name=nit_error,severity=3 value=0 1548161530912
-counter,name=nit_actual_error,severity=3 value=0 1548161530912
-counter,name=nit_other_error,severity=3 value=0 1548161530912
-counter,name=si_repetition_error,severity=3 value=0 1548161530912
-counter,name=si_pid_error,severity=3 value=0 1548161530912
-counter,name=buffer_error,severity=3 value=0 1548161530912
-counter,name=unreferenced_pid,severity=3 value=0 1548161530912
-counter,name=sdt_error,severity=3 value=0 1548161530912
-counter,name=sdt_actual_error,severity=3 value=0 1548161530912
-counter,name=sdt_other_error,severity=3 value=0 1548161530912
-counter,name=eit_error,severity=3 value=0 1548161530912
-counter,name=eit_actual_error,severity=3 value=0 1548161530912
-counter,name=eit_other_error,severity=3 value=1 1548161530912
-counter,name=eit_pf_error,severity=3 value=31 1548161530912
-counter,name=rst_error,severity=3 value=0 1548161530912
-counter,name=tdt_error,severity=3 value=0 1548161530912
-counter,name=empty_buffer_error,severity=3 value=0 1548161530912
-counter,name=data_delay_error,severity=3 value=0 1548161530912
-counter,name=packet_count,severity=4 value=43220 1548161530912
-counter,name=error_count,severity=4 value=262 1548161530912
+counter,name=ts_sync_loss,severity=1,scope=ts,tsid=4 value=0 1548161530912
+counter,name=sync_byte_error,severity=1,scope=ts,tsid=4 value=0 1548161530912
+counter,name=pat_error,severity=1,scope=ts,tsid=4 value=0 1548161530912
+counter,name=pat_error_2,severity=1,scope=ts,tsid=4 value=0 1548161530912
+counter,name=continuity_count_error,severity=1,scope=ts,tsid=4 value=220 1548161530912
+counter,name=pmt_error,severity=1,scope=ts,tsid=4 value=0 1548161530912
+counter,name=pmt_error_2,severity=1,scope=ts,tsid=4 value=0 1548161530912
+counter,name=pid_error,severity=1,scope=ts,tsid=4 value=0 1548161530912
+counter,name=transport_error,severity=2,scope=ts,tsid=4 value=0 1548161530912
+counter,name=crc_error,severity=2,scope=ts,tsid=4 value=0 1548161530912
+counter,name=crc_error_2,severity=2,scope=ts,tsid=4 value=0 1548161530912
+counter,name=pcr_error,severity=2,scope=ts,tsid=4 value=0 1548161530912
+counter,name=pcr_repetition_error,severity=2,scope=ts,tsid=4 value=0 1548161530912
+counter,name=pcr_discontinuity_indicator_error,severity=2,scope=ts,tsid=4 value=0 1548161530912
+counter,name=pcr_accuracy_error,severity=2,scope=ts,tsid=4 value=0 1548161530912
+counter,name=pts_error,severity=2,scope=ts,tsid=4 value=10 1548161530912
+counter,name=cat_error,severity=2,scope=ts,tsid=4 value=0 1548161530912
+counter,name=nit_error,severity=3,scope=ts,tsid=4 value=0 1548161530912
+counter,name=nit_actual_error,severity=3,scope=ts,tsid=4 value=0 1548161530912
+counter,name=nit_other_error,severity=3,scope=ts,tsid=4 value=0 1548161530912
+counter,name=si_repetition_error,severity=3,scope=ts,tsid=4 value=0 1548161530912
+counter,name=si_pid_error,severity=3,scope=ts,tsid=4 value=0 1548161530912
+counter,name=buffer_error,severity=3,scope=ts,tsid=4 value=0 1548161530912
+counter,name=unreferenced_pid,severity=3,scope=ts,tsid=4 value=0 1548161530912
+counter,name=sdt_error,severity=3,scope=ts,tsid=4 value=0 1548161530912
+counter,name=sdt_actual_error,severity=3,scope=ts,tsid=4 value=0 1548161530912
+counter,name=sdt_other_error,severity=3,scope=ts,tsid=4 value=0 1548161530912
+counter,name=eit_error,severity=3,scope=ts,tsid=4 value=0 1548161530912
+counter,name=eit_actual_error,severity=3,scope=ts,tsid=4 value=0 1548161530912
+counter,name=eit_other_error,severity=3,scope=ts,tsid=4 value=1 1548161530912
+counter,name=eit_pf_error,severity=3,scope=ts,tsid=4 value=31 1548161530912
+counter,name=rst_error,severity=3,scope=ts,tsid=4 value=0 1548161530912
+counter,name=tdt_error,severity=3,scope=ts,tsid=4 value=0 1548161530912
+counter,name=empty_buffer_error,severity=3,scope=ts,tsid=4 value=0 1548161530912
+counter,name=data_delay_error,severity=3,scope=ts,tsid=4 value=0 1548161530912
+counter,name=packet_count,severity=4,scope=ts,tsid=4 value=43220 1548161530912
+counter,name=error_count,severity=4,scope=ts,tsid=4 value=262 1548161530912
+----
+
+With options `--tr-101-290 --services --all-pids --max-severity 3`, the counters are
+added per service and per PID, when non-zero. All global counters, with `scope=ts`,
+are always sent, even they are zero.
+
+Note that, when logging counters for all PID's, it is recommended to use `--max-severity 3`.
+Otherwise, all informational counters, with severity 4, are also logged. Because these
+counters include `packet_count` (the number of packets per PID or per service), these
+counters are never zero and tend to overflow InfluxDB.
+
+[source,text]
+----
+bitrate,scope=ts,tsid=4 value=22936796 1548161530912
+counter,name=ts_sync_loss,severity=1,scope=ts,tsid=4 value=0 1548161530912
+counter,name=sync_byte_error,severity=1,scope=ts,tsid=4 value=0 1548161530912
+counter,name=pat_error,severity=1,scope=ts,tsid=4 value=0 1548161530912
+counter,name=pat_error_2,severity=1,scope=ts,tsid=4 value=0 1548161530912
+counter,name=continuity_count_error,severity=1,scope=ts,tsid=4 value=220 1548161530912
+counter,name=continuity_count_error,severity=1,scope=service,tsid=4,service=1025 value=44 1548161530912
+counter,name=continuity_count_error,severity=1,scope=service,tsid=4,service=1026 value=40 1548161530912
+counter,name=continuity_count_error,severity=1,scope=service,tsid=4,service=1031 value=42 1548161530912
+counter,name=continuity_count_error,severity=1,scope=service,tsid=4,service=1045 value=45 1548161530912
+counter,name=continuity_count_error,severity=1,scope=service,tsid=4,service=1046 value=38 1548161530912
+counter,name=continuity_count_error,severity=1,scope=service,tsid=4,service=global value=11 1548161530912
+counter,name=continuity_count_error,severity=1,scope=pid,tsid=4,pid=0 value=1 1548161530912
+counter,name=continuity_count_error,severity=1,scope=pid,tsid=4,pid=18 value=3 1548161530912
+counter,name=continuity_count_error,severity=1,scope=pid,tsid=4,pid=100 value=1 1548161530912
+counter,name=continuity_count_error,severity=1,scope=pid,tsid=4,pid=120 value=13 1548161530912
+counter,name=continuity_count_error,severity=1,scope=pid,tsid=4,pid=130 value=13 1548161530912
+counter,name=continuity_count_error,severity=1,scope=pid,tsid=4,pid=132 value=6 1548161530912
+counter,name=continuity_count_error,severity=1,scope=pid,tsid=4,pid=140 value=2 1548161530912
+counter,name=continuity_count_error,severity=1,scope=pid,tsid=4,pid=170 value=3 1548161530912
+...
 ----

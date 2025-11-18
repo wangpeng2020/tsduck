@@ -47,6 +47,34 @@ ts::TLSConnection::~TLSConnection()
 
 
 //----------------------------------------------------------------------------
+// Set command line arguments for the client.
+//----------------------------------------------------------------------------
+
+void ts::TLSConnection::setArgs(const TLSArgs& args)
+{
+    setServerName(args.server_name);
+    _verify_peer = !args.insecure;
+}
+
+
+//----------------------------------------------------------------------------
+// For a client connection, specify the server names.
+//----------------------------------------------------------------------------
+
+void ts::TLSConnection::setServerName(const UString& server_name)
+{
+    _server_name = server_name;
+    _additional_names.clear();
+    IPSocketAddress::RemovePort(_server_name);
+}
+
+void ts::TLSConnection::addVerifyServer(const UString& name)
+{
+    _additional_names.push_back(name);
+}
+
+
+//----------------------------------------------------------------------------
 // Receive data until buffer is full.
 //----------------------------------------------------------------------------
 

@@ -56,6 +56,16 @@ namespace ts {
         Report& report() { return _report; }
 
         //!
+        //! Default TCP port for HTTP.
+        //!
+        static constexpr uint16_t DEFAULT_HTTP_PORT = 80;
+
+        //!
+        //! Default TCP port for HTTPS.
+        //!
+        static constexpr uint16_t DEFAULT_HTTPS_PORT = 443;
+
+        //!
         //! Set the connection timeout for this request.
         //! @param [in] timeout Connection timeout in milliseconds.
         //!
@@ -162,6 +172,12 @@ namespace ts {
         void setUserAgent(const UString& name = UString()) { _user_agent = name.empty() ? DEFAULT_USER_AGENT : name; }
 
         //!
+        //! Get the current user agent name to use in HTTP headers.
+        //! @return A constant reference to the user agent name to use in HTTP headers.
+        //!
+        const UString& userAgent() const { return _user_agent; }
+
+        //!
         //! Enable compression.
         //! Compression is disabled by default.
         //! @param [in] on Boolean setting compression on or off.
@@ -169,10 +185,11 @@ namespace ts {
         void enableCompression(bool on = true) { _use_compression = on; }
 
         //!
-        //! Get the current user agent name to use in HTTP headers.
-        //! @return A constant reference to the user agent name to use in HTTP headers.
+        //! Enable or disable HTTPS security (certificate validation).
+        //! Certificate validation is enabled by default.
+        //! @param [in] on If true, disable certificate validation.
         //!
-        const UString& userAgent() const { return _user_agent; }
+        void setInsecure(bool on = true) { _insecure = on; }
 
         //!
         //! Enable or disable the automatic redirection of HTTP requests.
@@ -270,16 +287,16 @@ namespace ts {
         size_t announdedContentSize() const { return _header_content_size; }
 
         //!
-        //! Representation of request or reponse headers.
-        //! The keys of the map are the header names.
-        //!
-        using HeadersMap = std::multimap<UString,UString>;
-
-        //!
         //! Get all response headers.
         //! @param [out] headers A multimap of all response headers.
         //!
-        void getResponseHeaders(HeadersMap& headers) const;
+        void getResponseHeaders(UStringToUStringMultiMap& headers) const { headers = _response_headers; }
+
+        //!
+        //! Get all response headers.
+        //! @return A constant reference to a map of response headers.
+        //!
+        const UStringToUStringMultiMap& responseHeaders() const { return _response_headers; }
 
         //!
         //! Get the value of one header.
@@ -397,7 +414,6 @@ namespace ts {
 
         Report&          _report;
         UString          _user_agent {DEFAULT_USER_AGENT};
-        bool             _auto_redirect = true;
         UString          _original_url {};
         UString          _final_url {};
         cn::milliseconds _connection_timeout {};
@@ -406,12 +422,14 @@ namespace ts {
         uint16_t         _proxy_port = 0;
         UString          _proxy_user {};
         UString          _proxy_password {};
-        bool             _use_compression = false;
-        fs::path         _cookies_file_name {};
         bool             _use_cookies = false;
+        bool             _auto_redirect = true;
+        bool             _use_compression = false;
+        bool             _insecure = false;
         bool             _delete_cookies_file = false; // delete the cookies file on close
-        HeadersMap       _request_headers {};          // all request headers (to send)
-        HeadersMap       _response_headers {};         // all response headers (received)
+        fs::path         _cookies_file_name {};
+        UStringToUStringMultiMap _request_headers {};  // all request headers (to send)
+        UStringToUStringMultiMap _response_headers {}; // all response headers (received)
         ByteBlock        _post_data {};                // if non empty, use a POST request
         int              _http_status = 0;             // 200, 404, etc.
         size_t           _content_size = 0;            // actually downloaded size

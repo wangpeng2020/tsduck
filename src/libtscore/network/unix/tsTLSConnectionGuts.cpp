@@ -14,6 +14,10 @@
 #include "tsOpenSSL.h"
 #include "tsNullReport.h"
 
+// Some OpenSSL macros use C-style casts and we need to disable warnings.
+TS_LLVM_NOWARNING(old-style-cast)
+TS_GCC_NOWARNING(old-style-cast)
+
 
 //----------------------------------------------------------------------------
 // Stubs when OpenSSL is not available.
@@ -27,6 +31,7 @@ class ts::TLSConnection::SystemGuts {};
 void ts::TLSConnection::allocateGuts() { _guts = new SystemGuts; }
 void ts::TLSConnection::deleteGuts() { delete _guts; }
 bool ts::TLSConnection::connect(const IPSocketAddress&, Report& report) TS_NOT_IMPL
+bool ts::TLSConnection::setServerContext(const void*, Report& report) TS_NOT_IMPL
 bool ts::TLSConnection::closeWriter(Report& report) TS_NOT_IMPL
 bool ts::TLSConnection::disconnect(Report& report) TS_NOT_IMPL
 bool ts::TLSConnection::send(const void*, size_t, Report& report) TS_NOT_IMPL
@@ -51,10 +56,10 @@ ts::UString ts::TLSConnection::GetLibraryVersion()
 
 class ts::TLSConnection::SystemGuts: public OpenSSL::Controlled
 {
-    TS_NOCOPY(SystemGuts);
+    TS_NOBUILD_NOCOPY(SystemGuts);
 public:
     // Constructor and destructor.
-    SystemGuts() = default;
+    SystemGuts(TLSConnection*);
     virtual ~SystemGuts() override;
 
     // Implementation of OpenSSL::Controlled.
@@ -62,12 +67,16 @@ public:
 
     // OpenSSL parameters. SSL_shutdown() shall be called up to tso times,
     // until the two-way shutdown is complete.
-    SSL_CTX* ssl_ctx = nullptr;
-    SSL*     ssl = nullptr;
-    size_t   shutdown_count = 2;
+    TLSConnection* conn;
+    SSL_CTX*       ssl_ctx = nullptr;
+    SSL*           ssl = nullptr;
+    size_t         shutdown_count = 2;
 
     // Process a SSL returned status. Return the SSL_get_error() code.
     int processStatus(Report& report, const UChar* func, int status);
+
+    // Abort a connection, closes everything, return false.
+    bool abort(Report& report, const UString& error_message = UString());
 };
 
 
@@ -77,12 +86,17 @@ public:
 
 void ts::TLSConnection::allocateGuts()
 {
-    _guts = new SystemGuts;
+    _guts = new SystemGuts(this);
 }
 
 void ts::TLSConnection::deleteGuts()
 {
     delete _guts;
+}
+
+ts::TLSConnection::SystemGuts::SystemGuts(TLSConnection* c) :
+    conn(c)
+{
 }
 
 ts::TLSConnection::SystemGuts::~SystemGuts()
@@ -117,6 +131,22 @@ int ts::TLSConnection::SystemGuts::processStatus(Report& report, const UChar* fu
 
 
 //----------------------------------------------------------------------------
+// Abort a connection, closes everything, return false.
+//----------------------------------------------------------------------------
+
+bool ts::TLSConnection::SystemGuts::abort(Report& report, const UString& message)
+{
+    if (!message.empty()) {
+        report.error(message);
+    }
+    OpenSSL::ReportErrors(report);
+    terminate();
+    conn->SuperClass::disconnect(NULLREP);
+    return false;
+}
+
+
+//----------------------------------------------------------------------------
 // Connect to a remote address and port.
 //----------------------------------------------------------------------------
 
@@ -124,53 +154,52 @@ bool ts::TLSConnection::connect(const IPSocketAddress& addr, Report& report)
 {
     _guts->terminate();
 
+    // Create SSL client context.
+    if ((_guts->ssl_ctx = OpenSSL::CreateContext(false, _verify_peer, report)) == nullptr) {
+        return false;
+    }
+
+    // Create an SSL session for that connection.
+    if ((_guts->ssl = ::SSL_new(_guts->ssl_ctx)) == nullptr) {
+        return _guts->abort(report, u"error creating TLS client connection context");
+    }
+
+    // Set host name for SNI.
+    if (!_server_name.empty() && !::SSL_set_tlsext_host_name(_guts->ssl, _server_name.toUTF8().c_str())) {
+        return _guts->abort(report, u"error setting TLS SNI server name (SSL_set_tlsext_host_name)");
+    }
+
+    // Set DNS names for verification of the server's certificate.
+    if (_verify_peer && !_server_name.empty()) {
+        // Set main server name.
+        if (!::SSL_set1_host(_guts->ssl, _server_name.toUTF8().c_str())) {
+            return _guts->abort(report, u"error setting TLS server name (SSL_set1_host)");
+        }
+        // Set additional names.
+        for (const auto& name : _additional_names) {
+            if (!name.empty() && !::SSL_add1_host(_guts->ssl, name.toUTF8().c_str())) {
+                return _guts->abort(report, u"error setting TLS additional server name (SSL_add1_host)");
+            }
+        }
+    }
+
     // Perform a TCP connection.
     if (!SuperClass::connect(addr, report)) {
-        return false;
+        return _guts->abort(report);
     }
 
-    // Create SSL client context.
-    _guts->ssl_ctx = SSL_CTX_new(TLS_client_method());
-    if (_guts->ssl_ctx == nullptr) {
-        report.error(u"error creating TLS client context");
-        OpenSSL::ReportErrors(report);
-        SuperClass::disconnect(NULLREP);
-        return false;
-    }
-
-    // Accept only TLS 1.2 and 1.3, others are obsolete.
-    SSL_CTX_set_min_proto_version(_guts->ssl_ctx, TLS1_2_VERSION);
-
-    // Check if the peer shall be verified.
-    SSL_CTX_set_verify(_guts->ssl_ctx, _verify_server ? SSL_VERIFY_PEER : SSL_VERIFY_NONE, nullptr);
-
-    // Create an SSL context for that connection.
-    const UChar* error = nullptr;
-    _guts->ssl = SSL_new(_guts->ssl_ctx);
-    if (_guts->ssl == nullptr) {
-        error = u"error creating TLS client connection context";
-    }
     // Associate the TCP socket file descriptor with that SSL session.
-    else if (SSL_set_fd(_guts->ssl, getSocket()) <= 0) {
-        error = u"error setting file descriptor in TLS client context";
-    }
-    // Perform TLS handshake with the server.
-    else if (SSL_connect(_guts->ssl) <= 0) {
-        error = u"error in TLS handshake with server";
+    if (::SSL_set_fd(_guts->ssl, getSocket()) <= 0) {
+        return _guts->abort(report, u"error setting file descriptor in TLS client context");
     }
 
-    // Error processing.
-    if (error != nullptr) {
-        report.error(error);
-        OpenSSL::ReportErrors(report);
-        SuperClass::disconnect(NULLREP);
-        _guts->terminate();
-        return false;
+    // Perform TLS handshake with the server.
+    if (::SSL_connect(_guts->ssl) <= 0) {
+        return _guts->abort(report, u"error in TLS handshake with server");
     }
-    else {
-        report.debug(u"TLS connection established with %s, protocol: %s", addr, SSL_get_cipher_version(_guts->ssl));
-        return true;
-    }
+
+    report.debug(u"TLS connection established with %s, protocol: %s", addr, ::SSL_get_cipher_version(_guts->ssl));
+    return true;
 }
 
 
@@ -178,10 +207,11 @@ bool ts::TLSConnection::connect(const IPSocketAddress& addr, Report& report)
 // Receive an SSL* context from a server, as a new client connection.
 //----------------------------------------------------------------------------
 
-void ts::TLSConnection::setServerContext(void* ssl)
+bool ts::TLSConnection::setServerContext(const void* ssl, Report& report)
 {
     _guts->terminate();
-    _guts->ssl = reinterpret_cast<SSL*>(ssl);
+    _guts->ssl = const_cast<SSL*>(reinterpret_cast<const SSL*>(ssl));
+    return true;
 }
 
 

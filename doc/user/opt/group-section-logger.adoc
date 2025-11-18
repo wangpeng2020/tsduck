@@ -269,6 +269,16 @@ If the file name is empty or a dash (`-`), the binary sections are written to th
 See also option `--multiple-files`.
 
 [.opt]
+*--duration*
+
+[.optdoc]
+Display the time offset from the beginning of the stream with each table.
+This duration is based on PCR and other timestamps in the stream.
+
+[.optdoc]
+See also option `--timestamp`.
+
+[.opt]
 *-f* +
 *--flush*
 
@@ -404,10 +414,13 @@ With `--xml-output`, rewrite the same file with each table.
 The specified file always contains one single table, the latest one.
 
 [.opt]
-*--time-stamp*
+*--timestamp*
 
 [.optdoc]
-Display a time stamp (current local time) with each table.
+Display a timestamp (current local time) with each table.
+
+[.optdoc]
+See also option `--duration`.
 
 [.opt]
 *--xml-output* _file-name_
